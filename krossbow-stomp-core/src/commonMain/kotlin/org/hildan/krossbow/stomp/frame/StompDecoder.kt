@@ -1,13 +1,7 @@
 package org.hildan.krossbow.stomp.frame
 
-import kotlinx.io.core.ByteReadPacket
-import kotlinx.io.core.Input
-import kotlinx.io.core.buildPacket
-import kotlinx.io.core.readBytes
-import kotlinx.io.core.readText
-import kotlinx.io.core.readUTF8Line
-import kotlinx.io.core.readUntilDelimiter
-import kotlinx.io.core.use
+import okio.Buffer
+import okio.BufferedSource
 import org.hildan.krossbow.stomp.headers.HeaderEscaper
 import org.hildan.krossbow.stomp.headers.StompHeaders
 import org.hildan.krossbow.stomp.headers.asStompHeaders
@@ -16,13 +10,11 @@ internal object StompDecoder {
 
     private const val NULL_BYTE = 0.toByte()
 
-    private val MAX_COMMAND_LENGTH = StompCommand.values().map { it.text.length }.max()!!
+    fun decode(frameBytes: ByteArray): StompFrame = Buffer().apply { write(frameBytes) }.readStompFrame(true)
 
-    fun decode(frameBytes: ByteArray): StompFrame = ByteReadPacket(frameBytes).use { it.readStompFrame(true) }
+    fun decode(frameText: CharSequence): StompFrame = Buffer().apply { writeUtf8(frameText.toString()) }.readStompFrame(false)
 
-    fun decode(frameText: CharSequence): StompFrame = buildPacket { append(frameText) }.use { it.readStompFrame(false) }
-
-    private fun Input.readStompFrame(isBinary: Boolean): StompFrame {
+    private fun BufferedSource.readStompFrame(isBinary: Boolean): StompFrame {
         try {
             val command = readStompCommand()
             val headers = readStompHeaders(command.supportsHeaderEscapes)
@@ -35,12 +27,12 @@ internal object StompDecoder {
         }
     }
 
-    private fun Input.readStompCommand(): StompCommand {
-        val firstLine = readUTF8Line(estimate = MAX_COMMAND_LENGTH) ?: error("Missing command in STOMP frame")
+    private fun BufferedSource.readStompCommand(): StompCommand {
+        val firstLine = readUtf8Line() ?: error("Missing command in STOMP frame")
         return StompCommand.parse(firstLine)
     }
 
-    private fun Input.readStompHeaders(shouldUnescapeHeaders: Boolean): StompHeaders =
+    private fun BufferedSource.readStompHeaders(shouldUnescapeHeaders: Boolean): StompHeaders =
             utf8LineSequence()
                 .takeWhile { it.isNotEmpty() } // empty line marks end of headers
                 .parseLinesAsStompHeaders(shouldUnescapeHeaders)
@@ -63,20 +55,16 @@ internal object StompDecoder {
         return headersMap.asStompHeaders()
     }
 
-    private fun Input.utf8LineSequence(): Sequence<String> = sequence {
+    private fun BufferedSource.utf8LineSequence(): Sequence<String> = sequence {
         while (true) {
-            val line = readUTF8Line(estimate = 16) ?: error("Unexpected end of input")
-            yield(line)
+            yield(readUtf8LineStrict())
         }
     }
 
-    private fun Input.readBodyBytes(contentLength: Int?) = when (contentLength) {
+    private fun BufferedSource.readBodyBytes(contentLength: Int?) = when (contentLength) {
         0 -> null
-        null -> readUntilNullByte()
-        else -> readBytes(contentLength)
+        else -> readByteArray(contentLength?.toLong() ?: indexOf(NULL_BYTE))
     }
-
-    private fun Input.readUntilNullByte() = buildPacket { readUntilDelimiter(NULL_BYTE, this) }.readBytes()
 
     private fun ByteArray.toFrameBody(binary: Boolean) = when {
         isEmpty() -> null
@@ -84,16 +72,15 @@ internal object StompDecoder {
         else -> FrameBody.Text(this)
     }
 
-    private fun Input.expectNullOctet() {
-        val byte = readByte()
-        if (byte != NULL_BYTE) {
-            throw IllegalStateException("Expected NULL byte at end of frame")
+    private fun BufferedSource.expectNullOctet() {
+        if (readByte() != NULL_BYTE) {
+            error("Expected NULL byte at end of frame")
         }
     }
 
-    private fun Input.expectOnlyEOLs() {
-        if (!endOfInput) {
-            val endText = readText()
+    private fun BufferedSource.expectOnlyEOLs() {
+        if (!exhausted()) {
+            val endText = readUtf8()
             if (endText.any { it != '\n' && it != '\r' }) {
                 error("Unexpected non-EOL characters after end-of-frame NULL character: $endText")
             }
