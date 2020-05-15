@@ -11,7 +11,15 @@ import java.nio.ByteBuffer
 
 actual fun runSuspendingTest(block: suspend CoroutineScope.() -> Unit) = runBlocking { block() }
 
-class EchoWebSocketServer(port: Int) : WebSocketServer(InetSocketAddress(port)) {
+inline fun <T> withEchoServer(block: (EchoWebSocketServer) -> T): T {
+    val server = EchoWebSocketServer()
+    server.start()
+    val result = block(server)
+    server.stop()
+    return result
+}
+
+class EchoWebSocketServer : WebSocketServer(InetSocketAddress(12345)) {
 
     override fun onOpen(conn: WebSocket?, handshake: ClientHandshake?) {
     }
