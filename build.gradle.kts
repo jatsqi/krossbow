@@ -62,6 +62,19 @@ subprojects {
         //kotlinOptions.allWarningsAsErrors = true
     }
 
+    val testTask = tasks.findByName("test")
+    testTask?.configure<Test> {
+        useJUnitPlatform {
+            excludeTags("integration")
+        }
+    }
+
+    tasks.register<Test>("integrationTest") {
+        useJUnitPlatform {
+            includeTags("integration")
+        }
+    }
+
     tasks.withType<AbstractTestTask> {
         testLogging {
             events("failed", "standardOut", "standardError")
